@@ -30,7 +30,13 @@
               --add-flags "--ozone-platform=wayland" \
               --add-flags "--enable-features=WebRTCPipeWireCapturer,WaylandWindowDecorations" \
               --add-flags "--disable-frame-rate-limit" \
-              --add-flags "--autoplay-policy=no-user-gesture-required"
+              --add-flags "--autoplay-policy=no-user-gesture-required" \
+              --add-flags "--enable-gpu-vsync" \
+              --add-flags "--enable-accelerated-2d-canvas" \
+              --add-flags "--enable-gpu-rasterization" \
+              --add-flags "--enable-zero-copy" \
+              --add-flags "--disable-software-rasterizer" \
+              --add-flags "--max-gum-fps=60"
 
             # Wallpaper / always-on-bottom mode (kiosk + frameless)
             makeWrapper ${pkgs.ungoogled-chromium}/bin/chromium $out/bin/blood-reactor-wallpaper \
@@ -38,7 +44,13 @@
               --add-flags "--ozone-platform=wayland" \
               --add-flags "--enable-features=WebRTCPipeWireCapturer" \
               --add-flags "--kiosk" \
-              --add-flags "--no-frame-rate-limit"
+              --add-flags "--no-frame-rate-limit" \
+              --add-flags "--enable-gpu-vsync" \
+              --add-flags "--enable-accelerated-2d-canvas" \
+              --add-flags "--enable-gpu-rasterization" \
+              --add-flags "--enable-zero-copy" \
+              --add-flags "--disable-software-rasterizer" \
+              --add-flags "--max-gum-fps=60"
 
             # Create desktop file manually to ensure proper structure
             mkdir -p $out/share/applications

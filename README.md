@@ -12,6 +12,9 @@ An audio-reactive 3D visualizer built with Three.js that creates a blood-red cyl
 - **Performance Monitoring**: Real-time FPS counter with color-coded performance indicators
 - **Persistent Settings**: User preferences saved to localStorage
 - **Keyboard Controls**: Palette switching, fullscreen, and settings toggles
+- **VSync & FPS Limiting**: Desktop versions support VSync and configurable FPS limits (30-144Hz)
+- **Audio Monitor Detection**: Automatically detects system audio monitors for desktop audio capture
+- **Hardware Acceleration**: Optimized for desktop deployment with GPU acceleration
 
 ## Installation & Usage
 
@@ -39,6 +42,9 @@ nix profile install github:ALH477/tha-cylinda
 - **H**: Hide/show info text
 - **S**: Toggle FPS counter
 - **A**: Toggle audio status indicator
+- **M**: Toggle audio source (Default ↔ System Monitor)
+- **V**: Toggle VSync
+- **+/-**: Adjust FPS limit (30-144 Hz)
 
 ## Audio Requirements
 

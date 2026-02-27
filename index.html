@@ -68,8 +68,15 @@ let settings = {
     cameraBobbing: true,
     showFps: false,
     showAudioStatus: true,
-    palette: 0
+    palette: 0,
+    audioSource: 'default', // 'default', 'monitor', or device ID
+    vsyncEnabled: true,
+    fpsLimit: 60
 };
+
+// Audio device management
+let audioDevices = [];
+let currentAudioDevice = null;
 
 function loadSettings() {
     try {
@@ -177,17 +184,73 @@ function initScene() {
     if(isEmbed) document.getElementById('info').style.opacity = '0';
 }
 
+// Audio device detection and management
+async function detectAudioDevices() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        audioDevices = devices.filter(device => device.kind === 'audioinput');
+        
+        console.log('Available audio devices:', audioDevices);
+        
+        // Look for system audio/monitor devices
+        const monitorDevices = audioDevices.filter(device => 
+            device.label.toLowerCase().includes('monitor') ||
+            device.label.toLowerCase().includes('system') ||
+            device.label.toLowerCase().includes('desktop') ||
+            device.label.toLowerCase().includes('output')
+        );
+        
+        // Look for regular microphone devices
+        const micDevices = audioDevices.filter(device => 
+            device.label.toLowerCase().includes('microphone') ||
+            device.label.toLowerCase().includes('mic') ||
+            device.deviceId === 'default'
+        );
+        
+        return { monitorDevices, micDevices };
+    } catch (error) {
+        console.error('Error detecting audio devices:', error);
+        return { monitorDevices: [], micDevices: [] };
+    }
+}
+
 async function startAudio(){
     const btn = document.getElementById('startBtn');
     const statusEl = document.getElementById('audioStatus');
     
     btn.style.display = 'none';
     statusEl.style.display = 'block';
-    updateAudioStatus('initializing', 'Requesting microphone access...');
+    updateAudioStatus('initializing', 'Detecting audio devices...');
 
     try {
+        // Detect available audio devices
+        const { monitorDevices, micDevices } = await detectAudioDevices();
+        
+        // Choose audio source based on settings
+        let audioConstraints = true;
+        let sourceLabel = 'Default Audio';
+        
+        if (settings.audioSource === 'monitor' && monitorDevices.length > 0) {
+            audioConstraints = { audio: { deviceId: { exact: monitorDevices[0].deviceId } } };
+            sourceLabel = `System Monitor: ${monitorDevices[0].label}`;
+            currentAudioDevice = monitorDevices[0];
+        } else if (settings.audioSource !== 'default' && micDevices.length > 0) {
+            const targetDevice = micDevices.find(d => d.deviceId === settings.audioSource) || micDevices[0];
+            audioConstraints = { audio: { deviceId: { exact: targetDevice.deviceId } } };
+            sourceLabel = `Microphone: ${targetDevice.label}`;
+            currentAudioDevice = targetDevice;
+        } else {
+            // Default behavior - use system default
+            currentAudioDevice = audioDevices.find(d => d.deviceId === 'default') || audioDevices[0];
+            if (currentAudioDevice) {
+                sourceLabel = `Default: ${currentAudioDevice.label}`;
+            }
+        }
+        
+        updateAudioStatus('initializing', `Using: ${sourceLabel}`);
+        
         audioContext = new (window.AudioContext||window.webkitAudioContext)();
-        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        const stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
         
         const source = audioContext.createMediaStreamSource(stream);
         analyser = audioContext.createAnalyser();
@@ -198,7 +261,7 @@ async function startAudio(){
 
         audioState.status = 'active';
         audioState.retryCount = 0;
-        updateAudioStatus('active', 'Audio connected ✓');
+        updateAudioStatus('active', `Audio connected ✓ (${sourceLabel})`);
         
         if(isEmbed) renderer.domElement.requestFullscreen().catch(()=>{});
         animate();
@@ -208,15 +271,15 @@ async function startAudio(){
         
         if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
             audioState.status = 'denied';
-            updateAudioStatus('denied', 'Microphone access denied. Click to retry.');
+            updateAudioStatus('denied', 'Audio access denied. Click to retry.');
             showRetryButton();
         } else if (error.name === 'NotReadableError') {
             audioState.status = 'error';
-            updateAudioStatus('error', 'Microphone busy. Try again in a moment.');
+            updateAudioStatus('error', 'Audio device busy. Try again in a moment.');
             showRetryButton();
         } else {
             audioState.status = 'error';
-            updateAudioStatus('error', 'Audio error: ' + error.message);
+            updateAudioStatus('error', `Audio error: ${error.message}`);
             showRetryButton();
         }
     }
@@ -418,6 +481,33 @@ document.addEventListener('keydown', e=>{
         settings.showAudioStatus = !settings.showAudioStatus;
         saveSettings();
         applySettings();
+    }
+    // Audio source selection
+    if(e.key.toLowerCase()==='m') {
+        settings.audioSource = settings.audioSource === 'monitor' ? 'default' : 'monitor';
+        saveSettings();
+        updateAudioStatus('info', `Audio source: ${settings.audioSource === 'monitor' ? 'System Monitor' : 'Default'}`);
+        if (audioState.status === 'active') {
+            // Restart audio with new source
+            startAudio();
+        }
+    }
+    // VSync toggle
+    if(e.key.toLowerCase()==='v') {
+        settings.vsyncEnabled = !settings.vsyncEnabled;
+        saveSettings();
+        updateAudioStatus('info', `VSync: ${settings.vsyncEnabled ? 'Enabled' : 'Disabled'}`);
+    }
+    // FPS limit adjustment
+    if(e.key === '+' || e.key === '=') {
+        settings.fpsLimit = Math.min(144, settings.fpsLimit + 10);
+        saveSettings();
+        updateAudioStatus('info', `FPS limit: ${settings.fpsLimit}Hz`);
+    }
+    if(e.key === '-' || e.key === '_') {
+        settings.fpsLimit = Math.max(30, settings.fpsLimit - 10);
+        saveSettings();
+        updateAudioStatus('info', `FPS limit: ${settings.fpsLimit}Hz`);
     }
 });
 </script>
