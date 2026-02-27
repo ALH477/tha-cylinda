@@ -28,7 +28,7 @@ electron main.js
 ```bash
 nix run github:username/tha-cylinda
 # or install system-wide
-nix profile install github:username/tha-cylinda
+nix profile install github:ALH477/tha-cylinda
 ```
 
 ## Controls
@@ -128,6 +128,6 @@ MIT License - see LICENSE file for details.
 
 Built with ❤️ using Three.js and Web Audio API.
 
-Original concept and implementation by [Your Name].
+Original concept and implementation by Asher.
 
 Contributions welcome!
