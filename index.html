@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>DEEP BLOOD REACTOR • Energy Core Visualizer</title>
+    <style>
+        body { margin:0; overflow:hidden; background:#000; font-family:sans-serif; }
+        button {
+            position:absolute; top:40%; left:50%; transform:translate(-50%,-50%);
+            padding:20px 50px; font-size:22px; background:rgba(180,0,30,0.95);
+            color:#fff; border:none; border-radius:60px; cursor:pointer;
+            box-shadow:0 0 60px #ff1133; transition:all .4s; z-index:100;
+        }
+        button:hover { background:#ff3344; box-shadow:0 0 90px #ff5566; transform:translate(-50%,-50%) scale(1.05); }
+        #info {
+            position:absolute; bottom:20px; left:20px; color:rgba(255,255,255,0.25);
+            font-size:13px; z-index:100; transition:opacity 1.5s;
+        }
+        #paletteName {
+            position:absolute; top:30px; left:50%; transform:translateX(-50%);
+            color:rgba(255,180,180,0.4); font-size:15px; font-weight:300;
+            letter-spacing:3px; z-index:100; pointer-events:none;
+            text-shadow:0 0 20px #ff1133; transition:opacity 2s;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+</head>
+<body>
+<button id="startBtn">▶ START DEEP BLOOD REACTOR CORE (MIC)</button>
+    <div id="info">1-6 = palettes R = random F = fullscreen H = hide this Speak/play music near mic</div>
+    <div id="paletteName">DEEP BLOOD RED</div>
+    <div id="audioStatus" style="position:absolute; top:50px; left:20px; color:rgba(255,255,255,0.6); font-size:12px; z-index:100; background:rgba(0,0,0,0.3); padding:5px 10px; border-radius:4px; display:none;">Audio: Initializing...</div>
+    <div id="fpsCounter" style="position:absolute; top:20px; right:20px; color:rgba(255,255,255,0.4); font-size:12px; z-index:100; background:rgba(0,0,0,0.3); padding:5px 10px; border-radius:4px; display:none;">FPS: --</div>
+
+<script>
+// ================ EXTREMELY OPTIMIZED DEEP BLOOD REACTOR ================
+// Default = DEEP BLOOD RED (crimson cylinder + vivid blood energy)
+// 6 switchable palettes (keys 1-6)
+// New effects: inner plasma core pulse, cylinder breathing, dynamic rotation, bass camera bob
+// Embedded mode: add ?embed=1 to URL → auto-hides UI for desktop wallpaper use
+// Perfect for Wayland/X11 Linux desktop embedding (see bottom instructions)
+
+let scene, camera, renderer, cylinderMesh, energyInstancedMesh, innerCore, centerLight;
+let dummy = new THREE.Object3D();
+let analyser = null, dataArray = null, audioContext = null;
+const BAR_COUNT = 64;
+const CYLINDER_RADIUS = 5.2;
+const ENERGY_RADIUS = 3.9;
+const CYLINDER_HEIGHT = 9.8;
+
+// Performance monitoring
+let fpsCounter = null;
+let lastFpsTime = 0;
+let frameCount = 0;
+let currentFps = 0;
+
+// Audio state management
+let audioState = {
+    status: 'idle', // idle, initializing, active, error, denied
+    retryCount: 0,
+    maxRetries: 3
+};
+
+// Settings system
+let settings = {
+    audioSensitivity: 1.0,
+    rotationSpeed: 1.0,
+    cameraBobbing: true,
+    showFps: false,
+    showAudioStatus: true,
+    palette: 0
+};
+
+function loadSettings() {
+    try {
+        const saved = localStorage.getItem('bloodReactorSettings');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            settings = { ...settings, ...parsed };
+        }
+    } catch (e) {
+        console.warn('Failed to load settings:', e);
+    }
+}
+
+function saveSettings() {
+    try {
+        localStorage.setItem('bloodReactorSettings', JSON.stringify(settings));
+    } catch (e) {
+        console.warn('Failed to save settings:', e);
+    }
+}
+
+function applySettings() {
+    // Apply palette
+    applyPalette(settings.palette);
+    
+    // Apply UI visibility
+    const fpsEl = document.getElementById('fpsCounter');
+    const statusEl = document.getElementById('audioStatus');
+    
+    if (settings.showFps) {
+        fpsEl.style.display = 'block';
+    } else {
+        fpsEl.style.display = 'none';
+    }
+    
+    if (settings.showAudioStatus) {
+        statusEl.style.display = 'block';
+    } else {
+        statusEl.style.display = 'none';
+    }
+}
+
+const palettes = [
+    {name:"DEEP BLOOD RED",     cyl:0x220000, cylE:0x550000, bar:0x440000, barE:0xff1133, light:0xff1122, inner:0xff0022, innerE:0xff3344},
+    {name:"VOID PURPLE",        cyl:0x110022, cylE:0x330055, bar:0x220044, barE:0xcc33ff, light:0xaa22ff, inner:0x6600aa, innerE:0xbb44ff},
+    {name:"TOXIC EMERALD",      cyl:0x002211, cylE:0x004433, bar:0x003322, barE:0x33ff88, light:0x22ff66, inner:0x008844, innerE:0x44ff99},
+    {name:"ELECTRIC BLUE",      cyl:0x001122, cylE:0x004466, bar:0x002233, barE:0x00ccff, light:0x00aaff, inner:0x006699, innerE:0x33ddff},
+    {name:"INFERNO ORANGE",     cyl:0x331100, cylE:0x662200, bar:0x552200, barE:0xff6622, light:0xff4400, inner:0xaa3300, innerE:0xff8833},
+    {name:"GHOST PLASMA",       cyl:0x111111, cylE:0x333333, bar:0x222222, barE:0xdddddd, light:0xaaaaaa, inner:0x555555, innerE:0xeeeeee}
+];
+
+let currentPalette = 0;
+let isEmbed = new URLSearchParams(window.location.search).get('embed') === '1';
+let lastTime = 0;
+let bassHistory = 0;
+
+function initScene() {
+    scene = new THREE.Scene();
+
+    camera = new THREE.PerspectiveCamera(58, window.innerWidth/window.innerHeight, 0.1, 100);
+    camera.position.set(0, 3.5, 13.5);
+
+    renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0x111111, 0.3));
+    centerLight = new THREE.PointLight(0xff1122, 4, 40);
+    centerLight.position.set(0,0,0);
+    scene.add(centerLight);
+
+    // Outer cylinder (blood red default)
+    const cylGeo = new THREE.CylinderGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, 64, 1, true);
+    const cylMat = new THREE.MeshPhongMaterial({color:0x220000, emissive:0x550000, emissiveIntensity:0.9, shininess:8, transparent:true, opacity:0.38, wireframe:true, side:THREE.DoubleSide});
+    cylinderMesh = new THREE.Mesh(cylGeo, cylMat);
+    scene.add(cylinderMesh);
+
+    // Energy bars (instanced – 1 draw call)
+    const barGeo = new THREE.BoxGeometry(0.19, 1, 0.09);
+    const barMat = new THREE.MeshPhongMaterial({color:0x440000, emissive:0xff1133, emissiveIntensity:3.2, shininess:90});
+    energyInstancedMesh = new THREE.InstancedMesh(barGeo, barMat, BAR_COUNT);
+    energyInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(energyInstancedMesh);
+
+    // Pre-position bars
+    for(let i=0;i<BAR_COUNT;i++){
+        const a = (i/BAR_COUNT)*Math.PI*2;
+        dummy.position.set(Math.cos(a)*ENERGY_RADIUS, 0, Math.sin(a)*ENERGY_RADIUS);
+        dummy.rotation.y = a;
+        dummy.scale.set(1,1,1);
+        dummy.updateMatrix();
+        energyInstancedMesh.setMatrixAt(i, dummy.matrix);
+    }
+    energyInstancedMesh.instanceMatrix.needsUpdate = true;
+
+    // INNER PLASMA CORE (new effect)
+    const innerGeo = new THREE.CylinderGeometry(1.55, 1.55, CYLINDER_HEIGHT*0.92, 48, 1, true);
+    const innerMat = new THREE.MeshPhongMaterial({color:0xff0022, emissive:0xff3344, emissiveIntensity:4, transparent:true, opacity:0.55, side:THREE.DoubleSide});
+    innerCore = new THREE.Mesh(innerGeo, innerMat);
+    scene.add(innerCore);
+
+    window.addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+    if(isEmbed) document.getElementById('info').style.opacity = '0';
+}
+
+async function startAudio(){
+    const btn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('audioStatus');
+    
+    btn.style.display = 'none';
+    statusEl.style.display = 'block';
+    updateAudioStatus('initializing', 'Requesting microphone access...');
+
+    try {
+        audioContext = new (window.AudioContext||window.webkitAudioContext)();
+        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.78;
+        source.connect(analyser);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        audioState.status = 'active';
+        audioState.retryCount = 0;
+        updateAudioStatus('active', 'Audio connected ✓');
+        
+        if(isEmbed) renderer.domElement.requestFullscreen().catch(()=>{});
+        animate();
+        
+    } catch (error) {
+        console.error('Audio initialization error:', error);
+        
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            audioState.status = 'denied';
+            updateAudioStatus('denied', 'Microphone access denied. Click to retry.');
+            showRetryButton();
+        } else if (error.name === 'NotReadableError') {
+            audioState.status = 'error';
+            updateAudioStatus('error', 'Microphone busy. Try again in a moment.');
+            showRetryButton();
+        } else {
+            audioState.status = 'error';
+            updateAudioStatus('error', 'Audio error: ' + error.message);
+            showRetryButton();
+        }
+    }
+}
+
+function updateAudioStatus(status, message) {
+    const statusEl = document.getElementById('audioStatus');
+    audioState.status = status;
+    
+    statusEl.textContent = `Audio: ${message}`;
+    
+    // Color coding for status
+    if (status === 'active') {
+        statusEl.style.background = 'rgba(0, 100, 0, 0.6)';
+        statusEl.style.color = '#4ade80';
+    } else if (status === 'denied') {
+        statusEl.style.background = 'rgba(100, 0, 0, 0.6)';
+        statusEl.style.color = '#fca5a5';
+    } else if (status === 'error') {
+        statusEl.style.background = 'rgba(80, 40, 0, 0.6)';
+        statusEl.style.color = '#fdba74';
+    } else {
+        statusEl.style.background = 'rgba(0, 0, 0, 0.3)';
+        statusEl.style.color = 'rgba(255,255,255,0.6)';
+    }
+}
+
+function showRetryButton() {
+    const btn = document.createElement('button');
+    btn.textContent = 'Retry Audio';
+    btn.style.position = 'absolute';
+    btn.style.top = '60%';
+    btn.style.left = '50%';
+    btn.style.transform = 'translate(-50%, -50%)';
+    btn.style.zIndex = '200';
+    btn.style.background = 'rgba(100, 0, 0, 0.9)';
+    btn.style.color = '#fff';
+    btn.style.border = '1px solid #ff3344';
+    btn.style.borderRadius = '4px';
+    btn.style.padding = '10px 20px';
+    btn.style.cursor = 'pointer';
+    
+    btn.onclick = () => {
+        document.body.removeChild(btn);
+        startAudio();
+    };
+    
+    document.body.appendChild(btn);
+}
+
+function applyPalette(idx){
+    currentPalette = idx % palettes.length;
+    const p = palettes[currentPalette];
+    
+    cylinderMesh.material.color.setHex(p.cyl);
+    cylinderMesh.material.emissive.setHex(p.cylE);
+    
+    energyInstancedMesh.material.color.setHex(p.bar);
+    energyInstancedMesh.material.emissive.setHex(p.barE);
+    
+    centerLight.color.setHex(p.light);
+    
+    innerCore.material.color.setHex(p.inner);
+    innerCore.material.emissive.setHex(p.innerE);
+    
+    document.getElementById('paletteName').textContent = p.name;
+    document.getElementById('paletteName').style.opacity = '1';
+    setTimeout(()=>{ document.getElementById('paletteName').style.opacity = '0.35'; }, 1800);
+}
+
+function updateEnergy(time){
+    if(!analyser) return;
+    analyser.getByteFrequencyData(dataArray);
+
+    // Bass extraction
+    let bass = 0;
+    for(let i=0;i<14;i++) bass += dataArray[i];
+    bass = Math.pow(bass/(14*255), 1.35);
+    bassHistory = bassHistory*0.7 + bass*0.3;
+
+    // Central light pulse
+    centerLight.intensity = 3.5 + bass*18;
+
+    // Inner plasma core pulse + breathing outer cylinder
+    innerCore.scale.set(1, 0.75 + bass*1.65, 1);
+    innerCore.material.emissiveIntensity = 3 + bass*9;
+    cylinderMesh.scale.setScalar(1 + bass*0.035);
+
+    // Update energy bars
+    for(let i=0;i<BAR_COUNT;i++){
+        const bin = Math.floor(i * (dataArray.length/BAR_COUNT));
+        let amp = dataArray[bin]/255;
+        const scaleY = 0.25 + amp*10.5;
+
+        const a = (i/BAR_COUNT)*Math.PI*2;
+        dummy.position.set(Math.cos(a)*ENERGY_RADIUS, -CYLINDER_HEIGHT/2 + scaleY*0.5, Math.sin(a)*ENERGY_RADIUS);
+        dummy.scale.set(1, scaleY, 1);
+        dummy.rotation.y = a;
+        dummy.updateMatrix();
+        energyInstancedMesh.setMatrixAt(i, dummy.matrix);
+    }
+    energyInstancedMesh.instanceMatrix.needsUpdate = true;
+
+    // Dynamic rotation + subtle camera bob
+    const speed = 0.0009 + bassHistory*0.003;
+    cylinderMesh.rotation.y += speed*0.6;
+    energyInstancedMesh.rotation.y -= speed*1.1;
+    innerCore.rotation.y += speed*0.4;
+
+    camera.position.y = 3.5 + Math.sin(time/420)*0.18*bassHistory;
+    camera.lookAt(0, 0.6 + bassHistory*0.4, 0);
+}
+
+function animate(time=0){
+    requestAnimationFrame(animate);
+    updateEnergy(time);
+    updatePerformance(time);
+    renderer.render(scene, camera);
+}
+
+function updatePerformance(time) {
+    // FPS calculation
+    frameCount++;
+    if (time - lastFpsTime >= 1000) {
+        currentFps = frameCount;
+        frameCount = 0;
+        lastFpsTime = time;
+        
+        // Update FPS counter display
+        const fpsEl = document.getElementById('fpsCounter');
+        fpsEl.style.display = 'block';
+        fpsEl.textContent = `FPS: ${currentFps}`;
+        
+        // Color code FPS (green > 50, yellow 30-50, red < 30)
+        if (currentFps > 50) {
+            fpsEl.style.color = '#4ade80';
+        } else if (currentFps > 30) {
+            fpsEl.style.color = '#facc15';
+        } else {
+            fpsEl.style.color = '#f87171';
+        }
+    }
+}
+
+// Keyboard controls
+document.addEventListener('keydown', e=>{
+    if(e.key>='1'&&e.key<='6') applyPalette(parseInt(e.key)-1);
+    if(e.key.toLowerCase()==='r') applyPalette(Math.floor(Math.random()*palettes.length));
+    if(e.key.toLowerCase()==='f'){
+        if(!document.fullscreenElement) renderer.domElement.requestFullscreen();
+        else document.exitFullscreen();
+    }
+    if(e.key.toLowerCase()==='h'){
+        const i = document.getElementById('info');
+        i.style.opacity = i.style.opacity==='0' ? '0.25' : '0';
+    }
+});
+
+// Boot
+initScene();
+loadSettings(); // Load user settings
+applySettings(); // Apply loaded settings
+
+// Auto-hide button in embed mode
+if(isEmbed){
+    document.getElementById('startBtn').style.top = '55%';
+    document.getElementById('startBtn').style.fontSize = '18px';
+}
+
+document.getElementById('startBtn').addEventListener('click', startAudio);
+
+// Enhanced keyboard controls with settings
+document.addEventListener('keydown', e=>{
+    if(e.key>='1'&&e.key<='6') {
+        applyPalette(parseInt(e.key)-1);
+        settings.palette = parseInt(e.key)-1;
+        saveSettings();
+    }
+    if(e.key.toLowerCase()==='r') {
+        applyPalette(Math.floor(Math.random()*palettes.length));
+        settings.palette = currentPalette;
+        saveSettings();
+    }
+    if(e.key.toLowerCase()==='f'){
+        if(!document.fullscreenElement) renderer.domElement.requestFullscreen();
+        else document.exitFullscreen();
+    }
+    if(e.key.toLowerCase()==='h'){
+        const i = document.getElementById('info');
+        i.style.opacity = i.style.opacity==='0' ? '0.25' : '0';
+    }
+    // Settings shortcuts
+    if(e.key.toLowerCase()==='s') {
+        settings.showFps = !settings.showFps;
+        saveSettings();
+        applySettings();
+    }
+    if(e.key.toLowerCase()==='a') {
+        settings.showAudioStatus = !settings.showAudioStatus;
+        saveSettings();
+        applySettings();
+    }
+});
+</script>
+</body>
+</html>
